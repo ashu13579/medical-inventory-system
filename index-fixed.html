@@ -3,23 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Medical Inventory & Billing System - FIXED</title>
-    <meta http-equiv="refresh" content="0; url=index.html">
+    <title>Medical Inventory System - Loading...</title>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-    <p>Loading fixed version...</p>
+<body class="bg-gray-50 flex items-center justify-center min-h-screen">
+    <div class="text-center">
+        <div class="spinner mx-auto mb-4"></div>
+        <h2 class="text-xl font-bold mb-2">Loading Fixed Version...</h2>
+        <p class="text-gray-600">Applying fixes and redirecting...</p>
+    </div>
+    
+    <style>
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    
     <script>
-        // Redirect to main index and auto-apply fixes
-        window.location.href = 'index.html';
+        // Store that we want fixes applied
+        sessionStorage.setItem('applyFixes', 'true');
         
-        // Once loaded, apply fixes
-        window.addEventListener('load', function() {
-            setTimeout(function() {
-                const script = document.createElement('script');
-                script.src = 'fix-index.js';
-                document.head.appendChild(script);
-            }, 1000);
-        });
+        // Redirect to main index
+        setTimeout(() => {
+            window.location.href = 'index.html';
+        }, 500);
     </script>
 </body>
 </html>
