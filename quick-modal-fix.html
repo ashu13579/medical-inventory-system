@@ -1,0 +1,31 @@
+<!-- ADD THIS SCRIPT TAG BEFORE </body> IN index.html -->
+<script>
+// Quick Modal Fix - Paste this before </body> tag
+(function(){
+    const origShow = window.showModal;
+    const origHide = window.hideModal;
+    
+    window.showModal = function(id) {
+        const m = document.getElementById(id);
+        if (m) { m.classList.remove('modal-hidden'); m.style.display = 'flex'; }
+    };
+    
+    window.hideModal = function(id) {
+        const m = document.getElementById(id);
+        if (m) { m.classList.add('modal-hidden'); m.style.display = 'none'; }
+    };
+    
+    // Click outside to close
+    document.addEventListener('click', e => {
+        if (e.target.id === 'productModal') hideModal('productModal');
+    });
+    
+    // ESC to close
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            const m = document.getElementById('productModal');
+            if (m && !m.classList.contains('modal-hidden')) hideModal('productModal');
+        }
+    });
+})();
+</script>
