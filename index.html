@@ -6,21 +6,37 @@
     <title>Medical Inventory & Billing System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         .modal-hidden { display: none; }
+        @keyframes slideIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-slide-in { animation: slideIn 0.3s ease-out; }
+        
+        /* Print styles for invoice */
+        @media print {
+            body * { visibility: hidden; }
+            #invoice-print, #invoice-print * { visibility: visible; }
+            #invoice-print { position: absolute; left: 0; top: 0; width: 100%; }
+        }
     </style>
 </head>
 <body class="bg-gray-50">
     <div id="app"></div>
     
     <script>
+        const { jsPDF } = window.jspdf;
+        
         const state = {
             user: null,
             currentPage: 'login',
             products: [],
             categories: [{id:'1',name:'Tablets'},{id:'2',name:'Syrups'},{id:'3',name:'Injections'}],
             cart: [],
-            sales: []
+            sales: [],
+            currentInvoice: null
         };
 
         function login(username, password) {
@@ -42,9 +58,18 @@
             render();
         }
 
+        function showModal(modalId) {
+            document.getElementById(modalId).classList.remove('modal-hidden');
+        }
+
+        function hideModal(modalId) {
+            document.getElementById(modalId).classList.add('modal-hidden');
+        }
+
         function addProduct(data) {
             state.products.push({id: Date.now(), ...data, stock: 0});
-            alert('Product added!');
+            hideModal('productModal');
+            showNotification('Product added successfully!', 'success');
             render();
         }
 
@@ -63,26 +88,243 @@
             render();
         }
 
+        function updateCartQuantity(id, qty) {
+            const item = state.cart.find(i => i.id === id);
+            if (item) {
+                item.qty = parseInt(qty) || 1;
+                render();
+            }
+        }
+
         function completeSale(method) {
-            if (state.cart.length === 0) return alert('Cart is empty!');
-            const total = state.cart.reduce((sum, i) => sum + (i.price * i.qty), 0);
-            state.sales.push({
+            if (state.cart.length === 0) return showNotification('Cart is empty!', 'error');
+            
+            const subtotal = state.cart.reduce((sum, i) => sum + (i.price * i.qty), 0);
+            const tax = subtotal * 0.05; // 5% tax
+            const total = subtotal + tax;
+            
+            const sale = {
                 id: Date.now(),
                 invoice: 'INV' + Date.now(),
                 date: new Date().toLocaleDateString(),
+                time: new Date().toLocaleTimeString(),
                 items: [...state.cart],
+                subtotal: subtotal,
+                tax: tax,
                 total: total,
-                method: method
-            });
+                method: method,
+                customer: 'Walk-in Customer'
+            };
+            
+            state.sales.push(sale);
+            state.currentInvoice = sale;
             state.cart = [];
-            alert('Sale completed!');
-            navigateTo('sales');
+            
+            showNotification('Sale completed successfully!', 'success');
+            
+            // Show invoice modal
+            showModal('invoiceModal');
+            render();
+        }
+
+        function showNotification(message, type = 'info') {
+            const colors = {
+                success: 'bg-green-500',
+                error: 'bg-red-500',
+                info: 'bg-blue-500'
+            };
+            
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 ${colors[type]} text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-slide-in`;
+            notification.innerHTML = `
+                <div class="flex items-center space-x-2">
+                    <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
+                    <span>${message}</span>
+                </div>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+        }
+
+        function generatePDF(sale) {
+            const doc = new jsPDF();
+            
+            // Header
+            doc.setFontSize(20);
+            doc.setTextColor(37, 99, 235);
+            doc.text('MediStock Pro', 105, 20, { align: 'center' });
+            
+            doc.setFontSize(10);
+            doc.setTextColor(100);
+            doc.text('Medical Inventory & Billing System', 105, 27, { align: 'center' });
+            doc.text('123 Medical Street, Healthcare City', 105, 32, { align: 'center' });
+            doc.text('Phone: +91 1234567890 | Email: info@medistock.com', 105, 37, { align: 'center' });
+            
+            // Line separator
+            doc.setDrawColor(200);
+            doc.line(20, 42, 190, 42);
+            
+            // Invoice details
+            doc.setFontSize(16);
+            doc.setTextColor(0);
+            doc.text('INVOICE', 20, 52);
+            
+            doc.setFontSize(10);
+            doc.text(`Invoice #: ${sale.invoice}`, 20, 60);
+            doc.text(`Date: ${sale.date}`, 20, 66);
+            doc.text(`Time: ${sale.time}`, 20, 72);
+            doc.text(`Payment: ${sale.method}`, 20, 78);
+            
+            doc.text(`Customer: ${sale.customer}`, 120, 60);
+            doc.text(`Cashier: ${state.user.name}`, 120, 66);
+            
+            // Line separator
+            doc.line(20, 85, 190, 85);
+            
+            // Table header
+            doc.setFillColor(37, 99, 235);
+            doc.rect(20, 90, 170, 8, 'F');
+            doc.setTextColor(255);
+            doc.text('Item', 25, 95);
+            doc.text('Qty', 110, 95);
+            doc.text('Price', 135, 95);
+            doc.text('Total', 165, 95);
+            
+            // Table rows
+            doc.setTextColor(0);
+            let yPos = 105;
+            sale.items.forEach((item, index) => {
+                if (index % 2 === 0) {
+                    doc.setFillColor(245, 245, 245);
+                    doc.rect(20, yPos - 5, 170, 8, 'F');
+                }
+                
+                doc.text(item.name, 25, yPos);
+                doc.text(item.qty.toString(), 110, yPos);
+                doc.text(`₹${parseFloat(item.price).toFixed(2)}`, 135, yPos);
+                doc.text(`₹${(item.price * item.qty).toFixed(2)}`, 165, yPos);
+                yPos += 10;
+            });
+            
+            // Line separator
+            yPos += 5;
+            doc.line(20, yPos, 190, yPos);
+            
+            // Totals
+            yPos += 10;
+            doc.text('Subtotal:', 135, yPos);
+            doc.text(`₹${sale.subtotal.toFixed(2)}`, 165, yPos);
+            
+            yPos += 7;
+            doc.text('Tax (5%):', 135, yPos);
+            doc.text(`₹${sale.tax.toFixed(2)}`, 165, yPos);
+            
+            yPos += 7;
+            doc.setFontSize(12);
+            doc.setFont(undefined, 'bold');
+            doc.text('Total:', 135, yPos);
+            doc.text(`₹${sale.total.toFixed(2)}`, 165, yPos);
+            
+            // Footer
+            doc.setFontSize(9);
+            doc.setFont(undefined, 'normal');
+            doc.setTextColor(100);
+            yPos += 20;
+            doc.text('Thank you for your business!', 105, yPos, { align: 'center' });
+            doc.text('This is a computer-generated invoice', 105, yPos + 5, { align: 'center' });
+            
+            // Save PDF
+            doc.save(`Invoice_${sale.invoice}.pdf`);
+            showNotification('Invoice PDF downloaded!', 'success');
+        }
+
+        function printInvoice(sale) {
+            const printWindow = window.open('', '', 'height=600,width=800');
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>Invoice ${sale.invoice}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; }
+                        .header { text-align: center; margin-bottom: 30px; }
+                        .header h1 { color: #2563eb; margin: 0; }
+                        .details { display: flex; justify-content: space-between; margin: 20px 0; }
+                        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                        th { background: #2563eb; color: white; padding: 10px; text-align: left; }
+                        td { padding: 8px; border-bottom: 1px solid #ddd; }
+                        .totals { text-align: right; margin-top: 20px; }
+                        .totals div { margin: 5px 0; }
+                        .total-amount { font-size: 18px; font-weight: bold; }
+                        .footer { text-align: center; margin-top: 40px; color: #666; }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>MediStock Pro</h1>
+                        <p>Medical Inventory & Billing System</p>
+                        <p>123 Medical Street, Healthcare City | Phone: +91 1234567890</p>
+                    </div>
+                    
+                    <h2>INVOICE</h2>
+                    
+                    <div class="details">
+                        <div>
+                            <strong>Invoice #:</strong> ${sale.invoice}<br>
+                            <strong>Date:</strong> ${sale.date}<br>
+                            <strong>Time:</strong> ${sale.time}<br>
+                            <strong>Payment:</strong> ${sale.method}
+                        </div>
+                        <div>
+                            <strong>Customer:</strong> ${sale.customer}<br>
+                            <strong>Cashier:</strong> ${state.user.name}
+                        </div>
+                    </div>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th>Quantity</th>
+                                <th>Price</th>
+                                <th>Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${sale.items.map(item => `
+                                <tr>
+                                    <td>${item.name}</td>
+                                    <td>${item.qty}</td>
+                                    <td>₹${parseFloat(item.price).toFixed(2)}</td>
+                                    <td>₹${(item.price * item.qty).toFixed(2)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                    
+                    <div class="totals">
+                        <div><strong>Subtotal:</strong> ₹${sale.subtotal.toFixed(2)}</div>
+                        <div><strong>Tax (5%):</strong> ₹${sale.tax.toFixed(2)}</div>
+                        <div class="total-amount"><strong>Total:</strong> ₹${sale.total.toFixed(2)}</div>
+                    </div>
+                    
+                    <div class="footer">
+                        <p>Thank you for your business!</p>
+                        <p>This is a computer-generated invoice</p>
+                    </div>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+            printWindow.print();
         }
 
         function LoginPage() {
             return `
                 <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
-                    <div class="bg-white p-8 rounded-lg shadow-2xl w-96">
+                    <div class="bg-white p-8 rounded-lg shadow-2xl w-96 animate-slide-in">
                         <div class="text-center mb-8">
                             <i class="fas fa-hospital text-5xl text-blue-600 mb-4"></i>
                             <h1 class="text-3xl font-bold">Medical Inventory</h1>
@@ -91,13 +333,13 @@
                         <form onsubmit="event.preventDefault(); login(this.username.value, this.password.value);">
                             <div class="mb-4">
                                 <label class="block text-gray-700 mb-2">Username</label>
-                                <input type="text" name="username" value="admin" required class="w-full px-4 py-2 border rounded-lg">
+                                <input type="text" name="username" value="admin" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
                             </div>
                             <div class="mb-6">
                                 <label class="block text-gray-700 mb-2">Password</label>
-                                <input type="password" name="password" value="admin123" required class="w-full px-4 py-2 border rounded-lg">
+                                <input type="password" name="password" value="admin123" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
                             </div>
-                            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
+                            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition">
                                 <i class="fas fa-sign-in-alt mr-2"></i>Login
                             </button>
                         </form>
@@ -120,23 +362,23 @@
                                     <span class="text-xl font-bold">MediStock Pro</span>
                                 </div>
                                 <div class="flex space-x-4">
-                                    <button onclick="navigateTo('dashboard')" class="${state.currentPage === 'dashboard' ? 'text-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2">
+                                    <button onclick="navigateTo('dashboard')" class="${state.currentPage === 'dashboard' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2 transition">
                                         <i class="fas fa-chart-line mr-1"></i>Dashboard
                                     </button>
-                                    <button onclick="navigateTo('billing')" class="${state.currentPage === 'billing' ? 'text-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2">
+                                    <button onclick="navigateTo('billing')" class="${state.currentPage === 'billing' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2 transition">
                                         <i class="fas fa-cash-register mr-1"></i>Billing
                                     </button>
-                                    <button onclick="navigateTo('products')" class="${state.currentPage === 'products' ? 'text-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2">
+                                    <button onclick="navigateTo('products')" class="${state.currentPage === 'products' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2 transition">
                                         <i class="fas fa-pills mr-1"></i>Products
                                     </button>
-                                    <button onclick="navigateTo('sales')" class="${state.currentPage === 'sales' ? 'text-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2">
+                                    <button onclick="navigateTo('sales')" class="${state.currentPage === 'sales' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600'} hover:text-blue-600 px-3 py-2 transition">
                                         <i class="fas fa-receipt mr-1"></i>Sales
                                     </button>
                                 </div>
                             </div>
                             <div class="flex items-center space-x-4">
                                 <span class="text-gray-700"><i class="fas fa-user-circle mr-1"></i>${state.user.name}</span>
-                                <button onclick="logout()" class="text-red-600 hover:text-red-700">
+                                <button onclick="logout()" class="text-red-600 hover:text-red-700 transition">
                                     <i class="fas fa-sign-out-alt"></i>
                                 </button>
                             </div>
@@ -152,39 +394,43 @@
                 <div class="max-w-7xl mx-auto px-4 py-8">
                     <h1 class="text-3xl font-bold mb-8">Dashboard</h1>
                     <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                        <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow-lg">
+                        <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
                             <p class="text-blue-100 text-sm">Total Sales</p>
                             <p class="text-3xl font-bold mt-2">${state.sales.length}</p>
+                            <i class="fas fa-shopping-bag text-4xl text-blue-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
-                        <div class="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-lg shadow-lg">
+                        <div class="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
                             <p class="text-green-100 text-sm">Revenue</p>
                             <p class="text-3xl font-bold mt-2">₹${totalSales.toFixed(2)}</p>
+                            <i class="fas fa-rupee-sign text-4xl text-green-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
-                        <div class="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-6 rounded-lg shadow-lg">
+                        <div class="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
                             <p class="text-purple-100 text-sm">Products</p>
                             <p class="text-3xl font-bold mt-2">${state.products.length}</p>
+                            <i class="fas fa-pills text-4xl text-purple-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
-                        <div class="bg-gradient-to-br from-orange-500 to-orange-600 text-white p-6 rounded-lg shadow-lg">
+                        <div class="bg-gradient-to-br from-orange-500 to-orange-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
                             <p class="text-orange-100 text-sm">Low Stock</p>
                             <p class="text-3xl font-bold mt-2">0</p>
+                            <i class="fas fa-exclamation-triangle text-4xl text-orange-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
                     </div>
                     <div class="bg-white rounded-lg shadow-lg p-6 mb-8">
                         <h2 class="text-xl font-bold mb-4">Quick Actions</h2>
                         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <button onclick="navigateTo('billing')" class="bg-blue-500 text-white p-4 rounded-lg hover:bg-blue-600">
+                            <button onclick="navigateTo('billing')" class="bg-blue-500 text-white p-4 rounded-lg hover:bg-blue-600 transition transform hover:scale-105">
                                 <i class="fas fa-cash-register text-2xl mb-2"></i>
                                 <p class="font-semibold">New Sale</p>
                             </button>
-                            <button onclick="navigateTo('products')" class="bg-green-500 text-white p-4 rounded-lg hover:bg-green-600">
+                            <button onclick="navigateTo('products')" class="bg-green-500 text-white p-4 rounded-lg hover:bg-green-600 transition transform hover:scale-105">
                                 <i class="fas fa-plus-circle text-2xl mb-2"></i>
                                 <p class="font-semibold">Add Product</p>
                             </button>
-                            <button onclick="navigateTo('sales')" class="bg-purple-500 text-white p-4 rounded-lg hover:bg-purple-600">
+                            <button onclick="navigateTo('sales')" class="bg-purple-500 text-white p-4 rounded-lg hover:bg-purple-600 transition transform hover:scale-105">
                                 <i class="fas fa-receipt text-2xl mb-2"></i>
                                 <p class="font-semibold">View Sales</p>
                             </button>
-                            <button class="bg-orange-500 text-white p-4 rounded-lg hover:bg-orange-600">
+                            <button class="bg-orange-500 text-white p-4 rounded-lg hover:bg-orange-600 transition transform hover:scale-105">
                                 <i class="fas fa-file-alt text-2xl mb-2"></i>
                                 <p class="font-semibold">Reports</p>
                             </button>
@@ -199,7 +445,7 @@
                 <div class="max-w-7xl mx-auto px-4 py-8">
                     <div class="flex justify-between items-center mb-8">
                         <h1 class="text-3xl font-bold">Products</h1>
-                        <button onclick="document.getElementById('productModal').classList.remove('modal-hidden')" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">
+                        <button onclick="showModal('productModal')" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition">
                             <i class="fas fa-plus mr-2"></i>Add Product
                         </button>
                     </div>
@@ -209,15 +455,24 @@
                                 <tr>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200">
-                                ${state.products.map(p => `
+                                ${state.products.length === 0 ? `
                                     <tr>
+                                        <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+                                            <i class="fas fa-box-open text-4xl mb-2"></i>
+                                            <p>No products yet. Add your first product!</p>
+                                        </td>
+                                    </tr>
+                                ` : state.products.map(p => `
+                                    <tr class="hover:bg-gray-50">
                                         <td class="px-6 py-4 text-sm font-medium">${p.name}</td>
                                         <td class="px-6 py-4 text-sm">${p.sku}</td>
+                                        <td class="px-6 py-4 text-sm">${state.categories.find(c => c.id === p.category)?.name || '-'}</td>
                                         <td class="px-6 py-4 text-sm">₹${p.price}</td>
                                         <td class="px-6 py-4 text-sm">${p.stock}</td>
                                     </tr>
@@ -227,33 +482,43 @@
                     </div>
                 </div>
                 
-                <div id="productModal" class="modal-hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-                    <div class="bg-white rounded-lg p-8 max-w-2xl w-full mx-4">
-                        <h2 class="text-2xl font-bold mb-6">Add New Product</h2>
-                        <form onsubmit="event.preventDefault(); addProduct({name:this.name.value,sku:this.sku.value,price:this.price.value,category:this.category.value}); document.getElementById('productModal').classList.add('modal-hidden'); this.reset();">
+                <!-- Product Modal -->
+                <div id="productModal" class="modal-hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div class="bg-white rounded-lg p-8 max-w-2xl w-full mx-4 animate-slide-in">
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-2xl font-bold">Add New Product</h2>
+                            <button onclick="hideModal('productModal')" class="text-gray-500 hover:text-gray-700">
+                                <i class="fas fa-times text-2xl"></i>
+                            </button>
+                        </div>
+                        <form onsubmit="event.preventDefault(); addProduct({name:this.name.value,sku:this.sku.value,price:this.price.value,category:this.category.value}); this.reset();">
                             <div class="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label class="block text-gray-700 mb-2">Product Name</label>
-                                    <input type="text" name="name" required class="w-full px-4 py-2 border rounded-lg">
+                                    <label class="block text-gray-700 mb-2">Product Name *</label>
+                                    <input type="text" name="name" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
                                 </div>
                                 <div>
-                                    <label class="block text-gray-700 mb-2">SKU</label>
-                                    <input type="text" name="sku" required class="w-full px-4 py-2 border rounded-lg">
+                                    <label class="block text-gray-700 mb-2">SKU *</label>
+                                    <input type="text" name="sku" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
                                 </div>
                                 <div>
-                                    <label class="block text-gray-700 mb-2">Price</label>
-                                    <input type="number" step="0.01" name="price" required class="w-full px-4 py-2 border rounded-lg">
+                                    <label class="block text-gray-700 mb-2">Price *</label>
+                                    <input type="number" step="0.01" name="price" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
                                 </div>
                                 <div>
                                     <label class="block text-gray-700 mb-2">Category</label>
-                                    <select name="category" class="w-full px-4 py-2 border rounded-lg">
+                                    <select name="category" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
                                         ${state.categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
                                     </select>
                                 </div>
                             </div>
                             <div class="mt-6 flex justify-end space-x-4">
-                                <button type="button" onclick="document.getElementById('productModal').classList.add('modal-hidden')" class="px-6 py-2 border rounded-lg">Cancel</button>
-                                <button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg">Add Product</button>
+                                <button type="button" onclick="hideModal('productModal')" class="px-6 py-2 border rounded-lg hover:bg-gray-50 transition">
+                                    Cancel
+                                </button>
+                                <button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                                    Add Product
+                                </button>
                             </div>
                         </form>
                     </div>
@@ -262,17 +527,25 @@
         }
 
         function BillingPage() {
-            const total = state.cart.reduce((sum, i) => sum + (i.price * i.qty), 0);
+            const subtotal = state.cart.reduce((sum, i) => sum + (i.price * i.qty), 0);
+            const tax = subtotal * 0.05;
+            const total = subtotal + tax;
+            
             return `
                 <div class="max-w-7xl mx-auto px-4 py-8">
                     <h1 class="text-3xl font-bold mb-8">Point of Sale - Billing</h1>
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div class="lg:col-span-2">
                             <div class="bg-white rounded-lg shadow-lg p-6">
-                                <input type="text" placeholder="Search products..." class="w-full px-4 py-3 border rounded-lg mb-4">
+                                <input type="text" placeholder="Search products..." class="w-full px-4 py-3 border rounded-lg mb-4 focus:ring-2 focus:ring-blue-500 focus:outline-none">
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
-                                    ${state.products.map(p => `
-                                        <div class="border rounded-lg p-4 hover:bg-blue-50 cursor-pointer" onclick='addToCart(${JSON.stringify(p)})'>
+                                    ${state.products.length === 0 ? `
+                                        <div class="col-span-2 text-center py-8 text-gray-500">
+                                            <i class="fas fa-box-open text-4xl mb-2"></i>
+                                            <p>No products available. Add products first!</p>
+                                        </div>
+                                    ` : state.products.map(p => `
+                                        <div class="border rounded-lg p-4 hover:bg-blue-50 cursor-pointer transition" onclick='addToCart(${JSON.stringify(p)})'>
                                             <h3 class="font-bold">${p.name}</h3>
                                             <p class="text-sm text-gray-600">SKU: ${p.sku}</p>
                                             <p class="text-lg font-bold text-blue-600 mt-2">₹${p.price}</p>
@@ -282,7 +555,7 @@
                             </div>
                         </div>
                         <div class="lg:col-span-1">
-                            <div class="bg-white rounded-lg shadow-lg p-6">
+                            <div class="bg-white rounded-lg shadow-lg p-6 sticky top-4">
                                 <h2 class="text-xl font-bold mb-4">Cart</h2>
                                 <div class="space-y-3 mb-4 max-h-64 overflow-y-auto">
                                     ${state.cart.length === 0 ? '<p class="text-gray-500 text-center py-8">Cart is empty</p>' : ''}
@@ -290,36 +563,142 @@
                                         <div class="flex items-center justify-between border-b pb-2">
                                             <div class="flex-1">
                                                 <p class="font-semibold text-sm">${i.name}</p>
-                                                <p class="text-xs text-gray-600">₹${i.price} × ${i.qty}</p>
+                                                <div class="flex items-center space-x-2 mt-1">
+                                                    <span class="text-xs text-gray-600">₹${i.price}</span>
+                                                    <span class="text-xs text-gray-400">×</span>
+                                                    <input type="number" value="${i.qty}" min="1" 
+                                                        onchange="updateCartQuantity(${i.id}, this.value)"
+                                                        class="w-16 px-2 py-1 border rounded text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                                </div>
                                             </div>
-                                            <div class="text-right">
+                                            <div class="text-right ml-4">
                                                 <p class="font-bold">₹${(i.price * i.qty).toFixed(2)}</p>
-                                                <button onclick="removeFromCart(${i.id})" class="text-red-600 text-xs">
+                                                <button onclick="removeFromCart(${i.id})" class="text-red-600 text-xs hover:text-red-800">
                                                     <i class="fas fa-trash"></i>
                                                 </button>
                                             </div>
                                         </div>
                                     `).join('')}
                                 </div>
-                                <div class="border-t pt-4">
-                                    <div class="flex justify-between text-xl font-bold">
+                                
+                                <div class="border-t pt-4 space-y-2">
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-600">Subtotal:</span>
+                                        <span class="font-semibold">₹${subtotal.toFixed(2)}</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-600">Tax (5%):</span>
+                                        <span class="font-semibold">₹${tax.toFixed(2)}</span>
+                                    </div>
+                                    <div class="flex justify-between text-xl font-bold border-t pt-2">
                                         <span>Total:</span>
                                         <span class="text-blue-600">₹${total.toFixed(2)}</span>
                                     </div>
                                 </div>
+                                
                                 <div class="mt-6 space-y-2">
-                                    <button onclick="completeSale('CASH')" class="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 font-bold" ${state.cart.length === 0 ? 'disabled' : ''}>
+                                    <button onclick="completeSale('CASH')" 
+                                        class="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 font-bold transition"
+                                        ${state.cart.length === 0 ? 'disabled' : ''}>
                                         <i class="fas fa-money-bill-wave mr-2"></i>Cash Payment
                                     </button>
-                                    <button onclick="completeSale('CARD')" class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-bold" ${state.cart.length === 0 ? 'disabled' : ''}>
+                                    <button onclick="completeSale('CARD')" 
+                                        class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-bold transition"
+                                        ${state.cart.length === 0 ? 'disabled' : ''}>
                                         <i class="fas fa-credit-card mr-2"></i>Card Payment
                                     </button>
-                                    <button onclick="state.cart = []; render();" class="w-full bg-red-600 text-white py-2 rounded-lg hover:bg-red-700">
+                                    <button onclick="state.cart = []; render();" 
+                                        class="w-full bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 transition">
                                         <i class="fas fa-times mr-2"></i>Clear Cart
                                     </button>
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+                
+                <!-- Invoice Modal -->
+                <div id="invoiceModal" class="modal-hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div class="bg-white rounded-lg p-8 max-w-2xl w-full mx-4 animate-slide-in max-h-screen overflow-y-auto">
+                        ${state.currentInvoice ? `
+                            <div class="flex justify-between items-center mb-6">
+                                <h2 class="text-2xl font-bold">Invoice Generated</h2>
+                                <button onclick="hideModal('invoiceModal')" class="text-gray-500 hover:text-gray-700">
+                                    <i class="fas fa-times text-2xl"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="border rounded-lg p-6 mb-6">
+                                <div class="text-center mb-6">
+                                    <h3 class="text-2xl font-bold text-blue-600">MediStock Pro</h3>
+                                    <p class="text-sm text-gray-600">Medical Inventory & Billing System</p>
+                                </div>
+                                
+                                <div class="grid grid-cols-2 gap-4 mb-6">
+                                    <div>
+                                        <p class="text-sm text-gray-600">Invoice #</p>
+                                        <p class="font-bold">${state.currentInvoice.invoice}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-gray-600">Date</p>
+                                        <p class="font-bold">${state.currentInvoice.date}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-gray-600">Time</p>
+                                        <p class="font-bold">${state.currentInvoice.time}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-gray-600">Payment</p>
+                                        <p class="font-bold">${state.currentInvoice.method}</p>
+                                    </div>
+                                </div>
+                                
+                                <table class="w-full mb-4">
+                                    <thead class="bg-gray-50">
+                                        <tr>
+                                            <th class="px-4 py-2 text-left text-sm">Item</th>
+                                            <th class="px-4 py-2 text-right text-sm">Qty</th>
+                                            <th class="px-4 py-2 text-right text-sm">Price</th>
+                                            <th class="px-4 py-2 text-right text-sm">Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${state.currentInvoice.items.map(item => `
+                                            <tr class="border-b">
+                                                <td class="px-4 py-2 text-sm">${item.name}</td>
+                                                <td class="px-4 py-2 text-sm text-right">${item.qty}</td>
+                                                <td class="px-4 py-2 text-sm text-right">₹${parseFloat(item.price).toFixed(2)}</td>
+                                                <td class="px-4 py-2 text-sm text-right">₹${(item.price * item.qty).toFixed(2)}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                                
+                                <div class="border-t pt-4 space-y-2">
+                                    <div class="flex justify-between">
+                                        <span>Subtotal:</span>
+                                        <span>₹${state.currentInvoice.subtotal.toFixed(2)}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Tax (5%):</span>
+                                        <span>₹${state.currentInvoice.tax.toFixed(2)}</span>
+                                    </div>
+                                    <div class="flex justify-between text-xl font-bold border-t pt-2">
+                                        <span>Total:</span>
+                                        <span class="text-blue-600">₹${state.currentInvoice.total.toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-4">
+                                <button onclick="printInvoice(state.currentInvoice)" class="bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition">
+                                    <i class="fas fa-print mr-2"></i>Print Invoice
+                                </button>
+                                <button onclick="generatePDF(state.currentInvoice)" class="bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition">
+                                    <i class="fas fa-file-pdf mr-2"></i>Download PDF
+                                </button>
+                            </div>
+                        ` : ''}
                     </div>
                 </div>
             `;
@@ -338,16 +717,36 @@
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Items</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200">
-                                ${state.sales.map(s => `
+                                ${state.sales.length === 0 ? `
                                     <tr>
+                                        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
+                                            <i class="fas fa-receipt text-4xl mb-2"></i>
+                                            <p>No sales yet. Start selling!</p>
+                                        </td>
+                                    </tr>
+                                ` : state.sales.map(s => `
+                                    <tr class="hover:bg-gray-50">
                                         <td class="px-6 py-4 text-sm font-medium">${s.invoice}</td>
                                         <td class="px-6 py-4 text-sm">${s.date}</td>
                                         <td class="px-6 py-4 text-sm">${s.items.length}</td>
-                                        <td class="px-6 py-4 text-sm">₹${s.total.toFixed(2)}</td>
-                                        <td class="px-6 py-4 text-sm">${s.method}</td>
+                                        <td class="px-6 py-4 text-sm font-bold">₹${s.total.toFixed(2)}</td>
+                                        <td class="px-6 py-4 text-sm">
+                                            <span class="px-2 py-1 rounded-full text-xs ${s.method === 'CASH' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}">
+                                                ${s.method}
+                                            </span>
+                                        </td>
+                                        <td class="px-6 py-4 text-sm">
+                                            <button onclick='state.currentInvoice = ${JSON.stringify(s)}; showModal("invoiceModal"); render();' class="text-blue-600 hover:text-blue-800 mr-2">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                            <button onclick='generatePDF(${JSON.stringify(s)})' class="text-green-600 hover:text-green-800">
+                                                <i class="fas fa-file-pdf"></i>
+                                            </button>
+                                        </td>
                                     </tr>
                                 `).join('')}
                             </tbody>
