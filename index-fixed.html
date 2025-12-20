@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical Inventory & Billing System - FIXED</title>
+    <meta http-equiv="refresh" content="0; url=index.html">
+</head>
+<body>
+    <p>Loading fixed version...</p>
+    <script>
+        // Redirect to main index and auto-apply fixes
+        window.location.href = 'index.html';
+        
+        // Once loaded, apply fixes
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                const script = document.createElement('script');
+                script.src = 'fix-index.js';
+                document.head.appendChild(script);
+            }, 1000);
+        });
+    </script>
+</body>
+</html>
