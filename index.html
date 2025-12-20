@@ -15,7 +15,20 @@
         }
         .animate-slide-in { animation: slideIn 0.3s ease-out; }
         
-        /* Print styles for invoice */
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #2563eb;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
         @media print {
             body * { visibility: hidden; }
             #invoice-print, #invoice-print * { visibility: visible; }
@@ -29,53 +42,293 @@
     <script>
         const { jsPDF } = window.jspdf;
         
+        // API Configuration - UPDATE THIS WITH YOUR DEPLOYED BACKEND URL
+        const API_CONFIG = {
+            // For local development:
+            // baseURL: 'http://localhost:3000/api',
+            
+            // For production - UPDATE WITH YOUR RAILWAY/RENDER URL:
+            baseURL: 'https://your-backend-url.railway.app/api',
+            
+            // Uncomment and use your actual deployed backend URL:
+            // baseURL: 'https://medical-inventory-api.up.railway.app/api',
+        };
+        
         const state = {
             user: null,
+            token: localStorage.getItem('token') || null,
             currentPage: 'login',
             products: [],
-            categories: [{id:'1',name:'Tablets'},{id:'2',name:'Syrups'},{id:'3',name:'Injections'}],
+            categories: [],
+            suppliers: [],
+            customers: [],
             cart: [],
             sales: [],
-            currentInvoice: null
+            currentInvoice: null,
+            loading: false,
+            dashboardStats: null
         };
 
-        function login(username, password) {
-            if (username === 'admin' && password === 'admin123') {
-                state.user = {username: 'admin', name: 'Admin User', role: 'Admin'};
+        // API Helper Functions
+        async function apiCall(endpoint, options = {}) {
+            const url = `${API_CONFIG.baseURL}${endpoint}`;
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+            
+            if (state.token) {
+                headers['Authorization'] = `Bearer ${state.token}`;
+            }
+            
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    headers
+                });
+                
+                if (response.status === 401) {
+                    // Token expired or invalid
+                    logout();
+                    throw new Error('Session expired. Please login again.');
+                }
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || data.message || 'API request failed');
+                }
+                
+                return data;
+            } catch (error) {
+                console.error('API Error:', error);
+                throw error;
+            }
+        }
+
+        // Authentication
+        async function login(username, password) {
+            try {
+                state.loading = true;
+                render();
+                
+                const data = await apiCall('/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify({ username, password })
+                });
+                
+                state.token = data.token;
+                state.user = data.user;
+                localStorage.setItem('token', data.token);
+                
+                await loadInitialData();
                 navigateTo('dashboard');
-            } else {
-                alert('Invalid credentials');
+                showNotification('Login successful!', 'success');
+            } catch (error) {
+                showNotification(error.message || 'Login failed', 'error');
+            } finally {
+                state.loading = false;
+                render();
             }
         }
 
         function logout() {
             state.user = null;
+            state.token = null;
+            localStorage.removeItem('token');
             navigateTo('login');
         }
 
-        function navigateTo(page) {
-            state.currentPage = page;
-            render();
+        // Load initial data
+        async function loadInitialData() {
+            try {
+                await Promise.all([
+                    loadProducts(),
+                    loadCategories(),
+                    loadDashboardStats()
+                ]);
+            } catch (error) {
+                console.error('Error loading initial data:', error);
+            }
         }
 
-        function showModal(modalId) {
-            document.getElementById(modalId).classList.remove('modal-hidden');
+        // Products
+        async function loadProducts() {
+            try {
+                const data = await apiCall('/products');
+                state.products = data.map(p => ({
+                    id: p.product_id,
+                    name: p.product_name,
+                    sku: p.sku,
+                    price: parseFloat(p.selling_price),
+                    cost_price: parseFloat(p.cost_price),
+                    category: p.category_id,
+                    stock: p.total_stock || 0,
+                    reorder_level: p.reorder_level
+                }));
+            } catch (error) {
+                showNotification('Failed to load products', 'error');
+            }
         }
 
-        function hideModal(modalId) {
-            document.getElementById(modalId).classList.add('modal-hidden');
+        async function addProduct(data) {
+            try {
+                state.loading = true;
+                render();
+                
+                await apiCall('/products', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        product_name: data.name,
+                        sku: data.sku,
+                        category_id: parseInt(data.category),
+                        selling_price: parseFloat(data.price),
+                        cost_price: parseFloat(data.cost_price || data.price),
+                        tax_rate: parseFloat(data.tax_rate || 5),
+                        reorder_level: parseInt(data.reorder_level || 10),
+                        unit_of_measure: data.unit || 'PCS'
+                    })
+                });
+                
+                await loadProducts();
+                hideModal('productModal');
+                showNotification('Product added successfully!', 'success');
+            } catch (error) {
+                showNotification(error.message || 'Failed to add product', 'error');
+            } finally {
+                state.loading = false;
+                render();
+            }
         }
 
-        function addProduct(data) {
-            state.products.push({id: Date.now(), ...data, stock: 0});
-            hideModal('productModal');
-            showNotification('Product added successfully!', 'success');
-            render();
+        // Categories
+        async function loadCategories() {
+            try {
+                const data = await apiCall('/categories');
+                state.categories = data.map(c => ({
+                    id: c.category_id,
+                    name: c.category_name
+                }));
+            } catch (error) {
+                console.error('Failed to load categories:', error);
+                // Fallback categories
+                state.categories = [
+                    {id: 1, name: 'Tablets'},
+                    {id: 2, name: 'Syrups'},
+                    {id: 3, name: 'Injections'}
+                ];
+            }
         }
 
+        // Dashboard Stats
+        async function loadDashboardStats() {
+            try {
+                const data = await apiCall('/reports/dashboard');
+                state.dashboardStats = {
+                    todaySales: data.todaySales || 0,
+                    totalRevenue: parseFloat(data.totalRevenue || 0),
+                    lowStockCount: data.lowStockCount || 0,
+                    expiringCount: data.expiringCount || 0
+                };
+            } catch (error) {
+                console.error('Failed to load dashboard stats:', error);
+            }
+        }
+
+        // Sales
+        async function loadSales() {
+            try {
+                const data = await apiCall('/sales');
+                state.sales = data.map(s => ({
+                    id: s.sale_id,
+                    invoice: s.invoice_number,
+                    date: new Date(s.sale_date).toLocaleDateString(),
+                    time: new Date(s.created_at).toLocaleTimeString(),
+                    total: parseFloat(s.net_amount),
+                    subtotal: parseFloat(s.total_amount),
+                    tax: parseFloat(s.tax_amount),
+                    method: s.payment_method,
+                    customer: s.customer_name || 'Walk-in Customer',
+                    items: [] // Will be loaded separately if needed
+                }));
+            } catch (error) {
+                showNotification('Failed to load sales', 'error');
+            }
+        }
+
+        async function completeSale(method) {
+            if (state.cart.length === 0) {
+                return showNotification('Cart is empty!', 'error');
+            }
+            
+            try {
+                state.loading = true;
+                render();
+                
+                const subtotal = state.cart.reduce((sum, i) => sum + (i.price * i.qty), 0);
+                const tax = subtotal * 0.05;
+                const total = subtotal + tax;
+                
+                const saleData = {
+                    sale_date: new Date().toISOString().split('T')[0],
+                    payment_method: method,
+                    items: state.cart.map(item => ({
+                        product_id: item.id,
+                        quantity: item.qty,
+                        selling_price: item.price,
+                        tax_rate: 5,
+                        tax_amount: (item.price * item.qty * 0.05),
+                        total_amount: (item.price * item.qty)
+                    })),
+                    total_amount: subtotal,
+                    tax_amount: tax,
+                    net_amount: total
+                };
+                
+                const result = await apiCall('/sales', {
+                    method: 'POST',
+                    body: JSON.stringify(saleData)
+                });
+                
+                // Create invoice object
+                state.currentInvoice = {
+                    id: result.sale_id,
+                    invoice: result.invoice_number,
+                    date: new Date(result.sale_date).toLocaleDateString(),
+                    time: new Date(result.created_at).toLocaleTimeString(),
+                    items: state.cart,
+                    subtotal: subtotal,
+                    tax: tax,
+                    total: total,
+                    method: method,
+                    customer: 'Walk-in Customer'
+                };
+                
+                state.cart = [];
+                await loadProducts(); // Refresh stock
+                await loadDashboardStats(); // Refresh stats
+                
+                showNotification('Sale completed successfully!', 'success');
+                showModal('invoiceModal');
+            } catch (error) {
+                showNotification(error.message || 'Failed to complete sale', 'error');
+            } finally {
+                state.loading = false;
+                render();
+            }
+        }
+
+        // Cart Functions
         function addToCart(product) {
+            if (product.stock <= 0) {
+                return showNotification('Product out of stock!', 'error');
+            }
+            
             const existing = state.cart.find(i => i.id === product.id);
             if (existing) {
+                if (existing.qty >= product.stock) {
+                    return showNotification('Not enough stock!', 'error');
+                }
                 existing.qty += 1;
             } else {
                 state.cart.push({...product, qty: 1});
@@ -91,40 +344,36 @@
         function updateCartQuantity(id, qty) {
             const item = state.cart.find(i => i.id === id);
             if (item) {
+                const product = state.products.find(p => p.id === id);
+                if (qty > product.stock) {
+                    showNotification('Not enough stock!', 'error');
+                    return;
+                }
                 item.qty = parseInt(qty) || 1;
                 render();
             }
         }
 
-        function completeSale(method) {
-            if (state.cart.length === 0) return showNotification('Cart is empty!', 'error');
+        // UI Functions
+        function navigateTo(page) {
+            state.currentPage = page;
             
-            const subtotal = state.cart.reduce((sum, i) => sum + (i.price * i.qty), 0);
-            const tax = subtotal * 0.05; // 5% tax
-            const total = subtotal + tax;
+            // Load data when navigating to specific pages
+            if (page === 'sales') {
+                loadSales();
+            } else if (page === 'dashboard') {
+                loadDashboardStats();
+            }
             
-            const sale = {
-                id: Date.now(),
-                invoice: 'INV' + Date.now(),
-                date: new Date().toLocaleDateString(),
-                time: new Date().toLocaleTimeString(),
-                items: [...state.cart],
-                subtotal: subtotal,
-                tax: tax,
-                total: total,
-                method: method,
-                customer: 'Walk-in Customer'
-            };
-            
-            state.sales.push(sale);
-            state.currentInvoice = sale;
-            state.cart = [];
-            
-            showNotification('Sale completed successfully!', 'success');
-            
-            // Show invoice modal
-            showModal('invoiceModal');
             render();
+        }
+
+        function showModal(modalId) {
+            document.getElementById(modalId).classList.remove('modal-hidden');
+        }
+
+        function hideModal(modalId) {
+            document.getElementById(modalId).classList.add('modal-hidden');
         }
 
         function showNotification(message, type = 'info') {
@@ -149,10 +398,21 @@
             }, 3000);
         }
 
+        function LoadingSpinner() {
+            return `
+                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div class="bg-white p-6 rounded-lg shadow-xl">
+                        <div class="spinner mx-auto mb-4"></div>
+                        <p class="text-gray-700">Loading...</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // PDF Generation
         function generatePDF(sale) {
             const doc = new jsPDF();
             
-            // Header
             doc.setFontSize(20);
             doc.setTextColor(37, 99, 235);
             doc.text('MediStock Pro', 105, 20, { align: 'center' });
@@ -163,11 +423,9 @@
             doc.text('123 Medical Street, Healthcare City', 105, 32, { align: 'center' });
             doc.text('Phone: +91 1234567890 | Email: info@medistock.com', 105, 37, { align: 'center' });
             
-            // Line separator
             doc.setDrawColor(200);
             doc.line(20, 42, 190, 42);
             
-            // Invoice details
             doc.setFontSize(16);
             doc.setTextColor(0);
             doc.text('INVOICE', 20, 52);
@@ -179,12 +437,10 @@
             doc.text(`Payment: ${sale.method}`, 20, 78);
             
             doc.text(`Customer: ${sale.customer}`, 120, 60);
-            doc.text(`Cashier: ${state.user.name}`, 120, 66);
+            doc.text(`Cashier: ${state.user.full_name || state.user.username}`, 120, 66);
             
-            // Line separator
             doc.line(20, 85, 190, 85);
             
-            // Table header
             doc.setFillColor(37, 99, 235);
             doc.rect(20, 90, 170, 8, 'F');
             doc.setTextColor(255);
@@ -193,7 +449,6 @@
             doc.text('Price', 135, 95);
             doc.text('Total', 165, 95);
             
-            // Table rows
             doc.setTextColor(0);
             let yPos = 105;
             sale.items.forEach((item, index) => {
@@ -209,11 +464,9 @@
                 yPos += 10;
             });
             
-            // Line separator
             yPos += 5;
             doc.line(20, yPos, 190, yPos);
             
-            // Totals
             yPos += 10;
             doc.text('Subtotal:', 135, yPos);
             doc.text(`₹${sale.subtotal.toFixed(2)}`, 165, yPos);
@@ -228,7 +481,6 @@
             doc.text('Total:', 135, yPos);
             doc.text(`₹${sale.total.toFixed(2)}`, 165, yPos);
             
-            // Footer
             doc.setFontSize(9);
             doc.setFont(undefined, 'normal');
             doc.setTextColor(100);
@@ -236,7 +488,6 @@
             doc.text('Thank you for your business!', 105, yPos, { align: 'center' });
             doc.text('This is a computer-generated invoice', 105, yPos + 5, { align: 'center' });
             
-            // Save PDF
             doc.save(`Invoice_${sale.invoice}.pdf`);
             showNotification('Invoice PDF downloaded!', 'success');
         }
@@ -279,7 +530,7 @@
                         </div>
                         <div>
                             <strong>Customer:</strong> ${sale.customer}<br>
-                            <strong>Cashier:</strong> ${state.user.name}
+                            <strong>Cashier:</strong> ${state.user.full_name || state.user.username}
                         </div>
                     </div>
                     
@@ -321,6 +572,7 @@
             printWindow.print();
         }
 
+        // Page Components
         function LoginPage() {
             return `
                 <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
@@ -345,6 +597,10 @@
                         </form>
                         <div class="mt-6 p-4 bg-blue-50 rounded-lg text-sm">
                             <p><strong>Demo:</strong> admin / admin123</p>
+                            <p class="text-xs text-gray-600 mt-2">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                Backend: ${API_CONFIG.baseURL}
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -377,7 +633,7 @@
                                 </div>
                             </div>
                             <div class="flex items-center space-x-4">
-                                <span class="text-gray-700"><i class="fas fa-user-circle mr-1"></i>${state.user.name}</span>
+                                <span class="text-gray-700"><i class="fas fa-user-circle mr-1"></i>${state.user.full_name || state.user.username}</span>
                                 <button onclick="logout()" class="text-red-600 hover:text-red-700 transition">
                                     <i class="fas fa-sign-out-alt"></i>
                                 </button>
@@ -389,29 +645,35 @@
         }
 
         function DashboardPage() {
-            const totalSales = state.sales.reduce((sum, s) => sum + s.total, 0);
+            const stats = state.dashboardStats || {
+                todaySales: 0,
+                totalRevenue: 0,
+                lowStockCount: 0,
+                expiringCount: 0
+            };
+            
             return `
                 <div class="max-w-7xl mx-auto px-4 py-8">
                     <h1 class="text-3xl font-bold mb-8">Dashboard</h1>
                     <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                        <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
-                            <p class="text-blue-100 text-sm">Total Sales</p>
-                            <p class="text-3xl font-bold mt-2">${state.sales.length}</p>
+                        <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition relative">
+                            <p class="text-blue-100 text-sm">Today's Sales</p>
+                            <p class="text-3xl font-bold mt-2">${stats.todaySales}</p>
                             <i class="fas fa-shopping-bag text-4xl text-blue-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
-                        <div class="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
+                        <div class="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition relative">
                             <p class="text-green-100 text-sm">Revenue</p>
-                            <p class="text-3xl font-bold mt-2">₹${totalSales.toFixed(2)}</p>
+                            <p class="text-3xl font-bold mt-2">₹${stats.totalRevenue.toFixed(2)}</p>
                             <i class="fas fa-rupee-sign text-4xl text-green-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
-                        <div class="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
+                        <div class="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition relative">
                             <p class="text-purple-100 text-sm">Products</p>
                             <p class="text-3xl font-bold mt-2">${state.products.length}</p>
                             <i class="fas fa-pills text-4xl text-purple-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
-                        <div class="bg-gradient-to-br from-orange-500 to-orange-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition">
+                        <div class="bg-gradient-to-br from-orange-500 to-orange-600 text-white p-6 rounded-lg shadow-lg transform hover:scale-105 transition relative">
                             <p class="text-orange-100 text-sm">Low Stock</p>
-                            <p class="text-3xl font-bold mt-2">0</p>
+                            <p class="text-3xl font-bold mt-2">${stats.lowStockCount}</p>
                             <i class="fas fa-exclamation-triangle text-4xl text-orange-200 absolute right-6 top-6 opacity-50"></i>
                         </div>
                     </div>
@@ -422,7 +684,7 @@
                                 <i class="fas fa-cash-register text-2xl mb-2"></i>
                                 <p class="font-semibold">New Sale</p>
                             </button>
-                            <button onclick="navigateTo('products')" class="bg-green-500 text-white p-4 rounded-lg hover:bg-green-600 transition transform hover:scale-105">
+                            <button onclick="showModal('productModal')" class="bg-green-500 text-white p-4 rounded-lg hover:bg-green-600 transition transform hover:scale-105">
                                 <i class="fas fa-plus-circle text-2xl mb-2"></i>
                                 <p class="font-semibold">Add Product</p>
                             </button>
@@ -430,11 +692,69 @@
                                 <i class="fas fa-receipt text-2xl mb-2"></i>
                                 <p class="font-semibold">View Sales</p>
                             </button>
-                            <button class="bg-orange-500 text-white p-4 rounded-lg hover:bg-orange-600 transition transform hover:scale-105">
-                                <i class="fas fa-file-alt text-2xl mb-2"></i>
-                                <p class="font-semibold">Reports</p>
+                            <button onclick="loadDashboardStats(); render();" class="bg-orange-500 text-white p-4 rounded-lg hover:bg-orange-600 transition transform hover:scale-105">
+                                <i class="fas fa-sync-alt text-2xl mb-2"></i>
+                                <p class="font-semibold">Refresh</p>
                             </button>
                         </div>
+                    </div>
+                </div>
+                ${ProductModal()}
+            `;
+        }
+
+        function ProductModal() {
+            return `
+                <div id="productModal" class="modal-hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div class="bg-white rounded-lg p-8 max-w-2xl w-full mx-4 animate-slide-in">
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-2xl font-bold">Add New Product</h2>
+                            <button onclick="hideModal('productModal')" class="text-gray-500 hover:text-gray-700">
+                                <i class="fas fa-times text-2xl"></i>
+                            </button>
+                        </div>
+                        <form onsubmit="event.preventDefault(); addProduct({name:this.name.value,sku:this.sku.value,price:this.price.value,cost_price:this.cost_price.value,category:this.category.value,tax_rate:this.tax_rate.value,reorder_level:this.reorder_level.value}); this.reset();">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Product Name *</label>
+                                    <input type="text" name="name" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-700 mb-2">SKU *</label>
+                                    <input type="text" name="sku" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Selling Price *</label>
+                                    <input type="number" step="0.01" name="price" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Cost Price *</label>
+                                    <input type="number" step="0.01" name="cost_price" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Category</label>
+                                    <select name="category" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                        ${state.categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Tax Rate (%)</label>
+                                    <input type="number" step="0.01" name="tax_rate" value="5" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Reorder Level</label>
+                                    <input type="number" name="reorder_level" value="10" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                </div>
+                            </div>
+                            <div class="mt-6 flex justify-end space-x-4">
+                                <button type="button" onclick="hideModal('productModal')" class="px-6 py-2 border rounded-lg hover:bg-gray-50 transition">
+                                    Cancel
+                                </button>
+                                <button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                                    Add Product
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             `;
@@ -458,71 +778,37 @@
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200">
                                 ${state.products.length === 0 ? `
                                     <tr>
-                                        <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+                                        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
                                             <i class="fas fa-box-open text-4xl mb-2"></i>
                                             <p>No products yet. Add your first product!</p>
                                         </td>
                                     </tr>
-                                ` : state.products.map(p => `
+                                ` : state.products.map(p => {
+                                    const category = state.categories.find(c => c.id === p.category);
+                                    const isLowStock = p.stock <= p.reorder_level;
+                                    return `
                                     <tr class="hover:bg-gray-50">
                                         <td class="px-6 py-4 text-sm font-medium">${p.name}</td>
                                         <td class="px-6 py-4 text-sm">${p.sku}</td>
-                                        <td class="px-6 py-4 text-sm">${state.categories.find(c => c.id === p.category)?.name || '-'}</td>
-                                        <td class="px-6 py-4 text-sm">₹${p.price}</td>
-                                        <td class="px-6 py-4 text-sm">${p.stock}</td>
+                                        <td class="px-6 py-4 text-sm">${category ? category.name : '-'}</td>
+                                        <td class="px-6 py-4 text-sm">₹${p.price.toFixed(2)}</td>
+                                        <td class="px-6 py-4 text-sm ${isLowStock ? 'text-red-600 font-bold' : ''}">${p.stock}</td>
+                                        <td class="px-6 py-4 text-sm">
+                                            ${isLowStock ? '<span class="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs">Low Stock</span>' : '<span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs">In Stock</span>'}
+                                        </td>
                                     </tr>
-                                `).join('')}
+                                `}).join('')}
                             </tbody>
                         </table>
                     </div>
                 </div>
-                
-                <!-- Product Modal -->
-                <div id="productModal" class="modal-hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div class="bg-white rounded-lg p-8 max-w-2xl w-full mx-4 animate-slide-in">
-                        <div class="flex justify-between items-center mb-6">
-                            <h2 class="text-2xl font-bold">Add New Product</h2>
-                            <button onclick="hideModal('productModal')" class="text-gray-500 hover:text-gray-700">
-                                <i class="fas fa-times text-2xl"></i>
-                            </button>
-                        </div>
-                        <form onsubmit="event.preventDefault(); addProduct({name:this.name.value,sku:this.sku.value,price:this.price.value,category:this.category.value}); this.reset();">
-                            <div class="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label class="block text-gray-700 mb-2">Product Name *</label>
-                                    <input type="text" name="name" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                                </div>
-                                <div>
-                                    <label class="block text-gray-700 mb-2">SKU *</label>
-                                    <input type="text" name="sku" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                                </div>
-                                <div>
-                                    <label class="block text-gray-700 mb-2">Price *</label>
-                                    <input type="number" step="0.01" name="price" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                                </div>
-                                <div>
-                                    <label class="block text-gray-700 mb-2">Category</label>
-                                    <select name="category" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                                        ${state.categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="mt-6 flex justify-end space-x-4">
-                                <button type="button" onclick="hideModal('productModal')" class="px-6 py-2 border rounded-lg hover:bg-gray-50 transition">
-                                    Cancel
-                                </button>
-                                <button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
-                                    Add Product
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
+                ${ProductModal()}
             `;
         }
 
@@ -537,7 +823,9 @@
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div class="lg:col-span-2">
                             <div class="bg-white rounded-lg shadow-lg p-6">
-                                <input type="text" placeholder="Search products..." class="w-full px-4 py-3 border rounded-lg mb-4 focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                <input type="text" placeholder="Search products by name or SKU..." 
+                                    oninput="searchProducts(this.value)"
+                                    class="w-full px-4 py-3 border rounded-lg mb-4 focus:ring-2 focus:ring-blue-500 focus:outline-none">
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
                                     ${state.products.length === 0 ? `
                                         <div class="col-span-2 text-center py-8 text-gray-500">
@@ -545,10 +833,16 @@
                                             <p>No products available. Add products first!</p>
                                         </div>
                                     ` : state.products.map(p => `
-                                        <div class="border rounded-lg p-4 hover:bg-blue-50 cursor-pointer transition" onclick='addToCart(${JSON.stringify(p)})'>
+                                        <div class="border rounded-lg p-4 hover:bg-blue-50 cursor-pointer transition ${p.stock <= 0 ? 'opacity-50' : ''}" 
+                                            onclick='${p.stock > 0 ? `addToCart(${JSON.stringify(p)})` : ''}'>
                                             <h3 class="font-bold">${p.name}</h3>
                                             <p class="text-sm text-gray-600">SKU: ${p.sku}</p>
-                                            <p class="text-lg font-bold text-blue-600 mt-2">₹${p.price}</p>
+                                            <div class="flex justify-between items-center mt-2">
+                                                <p class="text-lg font-bold text-blue-600">₹${p.price.toFixed(2)}</p>
+                                                <p class="text-sm ${p.stock <= 0 ? 'text-red-600' : 'text-gray-600'}">
+                                                    Stock: ${p.stock}
+                                                </p>
+                                            </div>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -564,9 +858,9 @@
                                             <div class="flex-1">
                                                 <p class="font-semibold text-sm">${i.name}</p>
                                                 <div class="flex items-center space-x-2 mt-1">
-                                                    <span class="text-xs text-gray-600">₹${i.price}</span>
+                                                    <span class="text-xs text-gray-600">₹${i.price.toFixed(2)}</span>
                                                     <span class="text-xs text-gray-400">×</span>
-                                                    <input type="number" value="${i.qty}" min="1" 
+                                                    <input type="number" value="${i.qty}" min="1" max="${i.stock}"
                                                         onchange="updateCartQuantity(${i.id}, this.value)"
                                                         class="w-16 px-2 py-1 border rounded text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
                                                 </div>
@@ -598,12 +892,12 @@
                                 
                                 <div class="mt-6 space-y-2">
                                     <button onclick="completeSale('CASH')" 
-                                        class="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 font-bold transition"
+                                        class="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 font-bold transition ${state.cart.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
                                         ${state.cart.length === 0 ? 'disabled' : ''}>
                                         <i class="fas fa-money-bill-wave mr-2"></i>Cash Payment
                                     </button>
                                     <button onclick="completeSale('CARD')" 
-                                        class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-bold transition"
+                                        class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-bold transition ${state.cart.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
                                         ${state.cart.length === 0 ? 'disabled' : ''}>
                                         <i class="fas fa-credit-card mr-2"></i>Card Payment
                                     </button>
@@ -616,89 +910,94 @@
                         </div>
                     </div>
                 </div>
-                
-                <!-- Invoice Modal -->
+                ${InvoiceModal()}
+            `;
+        }
+
+        function InvoiceModal() {
+            if (!state.currentInvoice) return '';
+            
+            const sale = state.currentInvoice;
+            return `
                 <div id="invoiceModal" class="modal-hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                     <div class="bg-white rounded-lg p-8 max-w-2xl w-full mx-4 animate-slide-in max-h-screen overflow-y-auto">
-                        ${state.currentInvoice ? `
-                            <div class="flex justify-between items-center mb-6">
-                                <h2 class="text-2xl font-bold">Invoice Generated</h2>
-                                <button onclick="hideModal('invoiceModal')" class="text-gray-500 hover:text-gray-700">
-                                    <i class="fas fa-times text-2xl"></i>
-                                </button>
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-2xl font-bold">Invoice Generated</h2>
+                            <button onclick="hideModal('invoiceModal')" class="text-gray-500 hover:text-gray-700">
+                                <i class="fas fa-times text-2xl"></i>
+                            </button>
+                        </div>
+                        
+                        <div class="border rounded-lg p-6 mb-6">
+                            <div class="text-center mb-6">
+                                <h3 class="text-2xl font-bold text-blue-600">MediStock Pro</h3>
+                                <p class="text-sm text-gray-600">Medical Inventory & Billing System</p>
                             </div>
                             
-                            <div class="border rounded-lg p-6 mb-6">
-                                <div class="text-center mb-6">
-                                    <h3 class="text-2xl font-bold text-blue-600">MediStock Pro</h3>
-                                    <p class="text-sm text-gray-600">Medical Inventory & Billing System</p>
+                            <div class="grid grid-cols-2 gap-4 mb-6">
+                                <div>
+                                    <p class="text-sm text-gray-600">Invoice #</p>
+                                    <p class="font-bold">${sale.invoice}</p>
                                 </div>
-                                
-                                <div class="grid grid-cols-2 gap-4 mb-6">
-                                    <div>
-                                        <p class="text-sm text-gray-600">Invoice #</p>
-                                        <p class="font-bold">${state.currentInvoice.invoice}</p>
-                                    </div>
-                                    <div>
-                                        <p class="text-sm text-gray-600">Date</p>
-                                        <p class="font-bold">${state.currentInvoice.date}</p>
-                                    </div>
-                                    <div>
-                                        <p class="text-sm text-gray-600">Time</p>
-                                        <p class="font-bold">${state.currentInvoice.time}</p>
-                                    </div>
-                                    <div>
-                                        <p class="text-sm text-gray-600">Payment</p>
-                                        <p class="font-bold">${state.currentInvoice.method}</p>
-                                    </div>
+                                <div>
+                                    <p class="text-sm text-gray-600">Date</p>
+                                    <p class="font-bold">${sale.date}</p>
                                 </div>
-                                
-                                <table class="w-full mb-4">
-                                    <thead class="bg-gray-50">
-                                        <tr>
-                                            <th class="px-4 py-2 text-left text-sm">Item</th>
-                                            <th class="px-4 py-2 text-right text-sm">Qty</th>
-                                            <th class="px-4 py-2 text-right text-sm">Price</th>
-                                            <th class="px-4 py-2 text-right text-sm">Total</th>
+                                <div>
+                                    <p class="text-sm text-gray-600">Time</p>
+                                    <p class="font-bold">${sale.time}</p>
+                                </div>
+                                <div>
+                                    <p class="text-sm text-gray-600">Payment</p>
+                                    <p class="font-bold">${sale.method}</p>
+                                </div>
+                            </div>
+                            
+                            <table class="w-full mb-4">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-4 py-2 text-left text-sm">Item</th>
+                                        <th class="px-4 py-2 text-right text-sm">Qty</th>
+                                        <th class="px-4 py-2 text-right text-sm">Price</th>
+                                        <th class="px-4 py-2 text-right text-sm">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${sale.items.map(item => `
+                                        <tr class="border-b">
+                                            <td class="px-4 py-2 text-sm">${item.name}</td>
+                                            <td class="px-4 py-2 text-sm text-right">${item.qty}</td>
+                                            <td class="px-4 py-2 text-sm text-right">₹${parseFloat(item.price).toFixed(2)}</td>
+                                            <td class="px-4 py-2 text-sm text-right">₹${(item.price * item.qty).toFixed(2)}</td>
                                         </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${state.currentInvoice.items.map(item => `
-                                            <tr class="border-b">
-                                                <td class="px-4 py-2 text-sm">${item.name}</td>
-                                                <td class="px-4 py-2 text-sm text-right">${item.qty}</td>
-                                                <td class="px-4 py-2 text-sm text-right">₹${parseFloat(item.price).toFixed(2)}</td>
-                                                <td class="px-4 py-2 text-sm text-right">₹${(item.price * item.qty).toFixed(2)}</td>
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
-                                
-                                <div class="border-t pt-4 space-y-2">
-                                    <div class="flex justify-between">
-                                        <span>Subtotal:</span>
-                                        <span>₹${state.currentInvoice.subtotal.toFixed(2)}</span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                        <span>Tax (5%):</span>
-                                        <span>₹${state.currentInvoice.tax.toFixed(2)}</span>
-                                    </div>
-                                    <div class="flex justify-between text-xl font-bold border-t pt-2">
-                                        <span>Total:</span>
-                                        <span class="text-blue-600">₹${state.currentInvoice.total.toFixed(2)}</span>
-                                    </div>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                            
+                            <div class="border-t pt-4 space-y-2">
+                                <div class="flex justify-between">
+                                    <span>Subtotal:</span>
+                                    <span>₹${sale.subtotal.toFixed(2)}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Tax (5%):</span>
+                                    <span>₹${sale.tax.toFixed(2)}</span>
+                                </div>
+                                <div class="flex justify-between text-xl font-bold border-t pt-2">
+                                    <span>Total:</span>
+                                    <span class="text-blue-600">₹${sale.total.toFixed(2)}</span>
                                 </div>
                             </div>
-                            
-                            <div class="grid grid-cols-2 gap-4">
-                                <button onclick="printInvoice(state.currentInvoice)" class="bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition">
-                                    <i class="fas fa-print mr-2"></i>Print Invoice
-                                </button>
-                                <button onclick="generatePDF(state.currentInvoice)" class="bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition">
-                                    <i class="fas fa-file-pdf mr-2"></i>Download PDF
-                                </button>
-                            </div>
-                        ` : ''}
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <button onclick="printInvoice(state.currentInvoice)" class="bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition">
+                                <i class="fas fa-print mr-2"></i>Print Invoice
+                            </button>
+                            <button onclick="generatePDF(state.currentInvoice)" class="bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition">
+                                <i class="fas fa-file-pdf mr-2"></i>Download PDF
+                            </button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -707,14 +1006,19 @@
         function SalesPage() {
             return `
                 <div class="max-w-7xl mx-auto px-4 py-8">
-                    <h1 class="text-3xl font-bold mb-8">Sales History</h1>
+                    <div class="flex justify-between items-center mb-8">
+                        <h1 class="text-3xl font-bold">Sales History</h1>
+                        <button onclick="loadSales(); render();" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition">
+                            <i class="fas fa-sync-alt mr-2"></i>Refresh
+                        </button>
+                    </div>
                     <div class="bg-white rounded-lg shadow-lg overflow-hidden">
                         <table class="min-w-full">
                             <thead class="bg-gray-50">
                                 <tr>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Items</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
@@ -732,7 +1036,7 @@
                                     <tr class="hover:bg-gray-50">
                                         <td class="px-6 py-4 text-sm font-medium">${s.invoice}</td>
                                         <td class="px-6 py-4 text-sm">${s.date}</td>
-                                        <td class="px-6 py-4 text-sm">${s.items.length}</td>
+                                        <td class="px-6 py-4 text-sm">${s.customer}</td>
                                         <td class="px-6 py-4 text-sm font-bold">₹${s.total.toFixed(2)}</td>
                                         <td class="px-6 py-4 text-sm">
                                             <span class="px-2 py-1 rounded-full text-xs ${s.method === 'CASH' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}">
@@ -740,10 +1044,7 @@
                                             </span>
                                         </td>
                                         <td class="px-6 py-4 text-sm">
-                                            <button onclick='state.currentInvoice = ${JSON.stringify(s)}; showModal("invoiceModal"); render();' class="text-blue-600 hover:text-blue-800 mr-2">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <button onclick='generatePDF(${JSON.stringify(s)})' class="text-green-600 hover:text-green-800">
+                                            <button onclick='generatePDF(${JSON.stringify(s)})' class="text-green-600 hover:text-green-800" title="Download PDF">
                                                 <i class="fas fa-file-pdf"></i>
                                             </button>
                                         </td>
@@ -758,6 +1059,11 @@
 
         function render() {
             const app = document.getElementById('app');
+            
+            if (state.loading) {
+                app.innerHTML += LoadingSpinner();
+            }
+            
             if (!state.user) {
                 app.innerHTML = LoginPage();
                 return;
@@ -775,6 +1081,23 @@
             app.innerHTML = Navbar() + content;
         }
 
+        // Auto-login if token exists
+        async function autoLogin() {
+            if (state.token) {
+                try {
+                    const data = await apiCall('/auth/me');
+                    state.user = data;
+                    await loadInitialData();
+                    navigateTo('dashboard');
+                } catch (error) {
+                    console.error('Auto-login failed:', error);
+                    logout();
+                }
+            }
+        }
+
+        // Initialize
+        autoLogin();
         render();
     </script>
 </body>
