@@ -3,25 +3,72 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Medical Inventory System</title>
+    <title>Medical Inventory & Billing System</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #f9fafb;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        .spinner {
+            border: 4px solid #e5e7eb;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
 </head>
 <body>
+    <div id="loading">
+        <div class="spinner"></div>
+    </div>
+    
     <script>
-        // Load the main index.html content
-        fetch('index.html')
-            .then(response => response.text())
-            .then(html => {
+        // This page loads index.html and automatically applies the patch
+        (async function() {
+            try {
+                // Fetch the main index.html
+                const response = await fetch('index.html');
+                const html = await response.text();
+                
                 // Inject the patch script before </body>
-                const modifiedHtml = html.replace(
+                const fixedHtml = html.replace(
                     '</body>',
-                    '<script src="patch.js"></script></body>'
+                    '<script src="patch.js"></script>\n</body>'
                 );
                 
-                // Write the modified HTML
+                // Replace current document with fixed version
                 document.open();
-                document.write(modifiedHtml);
+                document.write(fixedHtml);
                 document.close();
-            });
+            } catch (error) {
+                document.body.innerHTML = `
+                    <div style="padding: 40px; text-align: center;">
+                        <h1 style="color: #ef4444;">Error Loading Application</h1>
+                        <p>${error.message}</p>
+                        <p><a href="index.html" style="color: #3b82f6;">Try loading index.html directly</a></p>
+                    </div>
+                `;
+            }
+        })();
     </script>
 </body>
 </html>
