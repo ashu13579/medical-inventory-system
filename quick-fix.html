@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical Inventory System</title>
+</head>
+<body>
+    <script>
+        // Load the main index.html content
+        fetch('index.html')
+            .then(response => response.text())
+            .then(html => {
+                // Inject the patch script before </body>
+                const modifiedHtml = html.replace(
+                    '</body>',
+                    '<script src="patch.js"></script></body>'
+                );
+                
+                // Write the modified HTML
+                document.open();
+                document.write(modifiedHtml);
+                document.close();
+            });
+    </script>
+</body>
+</html>
