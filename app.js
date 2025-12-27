@@ -77,12 +77,13 @@ const productModalHTML = `
 </div>
 `;
 
-// Show modal function
+// Show modal function - FIXED
 function showModal(modalId) {
     const modal = document.getElementById(modalId);
     if (modal) {
         modal.classList.remove('hidden');
         modal.classList.add('flex');
+        modal.style.display = 'flex';
         
         // Populate categories dropdown if it's the product modal
         if (modalId === 'productModal') {
@@ -91,12 +92,13 @@ function showModal(modalId) {
     }
 }
 
-// Hide modal function
+// Hide modal function - FIXED
 function hideModal(modalId) {
     const modal = document.getElementById(modalId);
     if (modal) {
         modal.classList.add('hidden');
         modal.classList.remove('flex');
+        modal.style.display = 'none';
         
         // Reset form if it exists
         const form = modal.querySelector('form');
@@ -104,8 +106,8 @@ function hideModal(modalId) {
     }
 }
 
-// Populate categories dropdown
-function populateCategories Dropdown() {
+// Populate categories dropdown - FIXED TYPO
+function populateCategoriesDropdown() {
     const select = document.querySelector('#productModal select[name="category_id"]');
     if (!select) return;
     
@@ -177,6 +179,23 @@ async function handleProductSubmit(event) {
 document.addEventListener('DOMContentLoaded', () => {
     // Add modal to body
     document.body.insertAdjacentHTML('beforeend', productModalHTML);
+    
+    // Add ESC key listener
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const modal = document.getElementById('productModal');
+            if (modal && !modal.classList.contains('hidden')) {
+                hideModal('productModal');
+            }
+        }
+    });
+    
+    // Add click outside to close
+    document.addEventListener('click', (e) => {
+        if (e.target.id === 'productModal') {
+            hideModal('productModal');
+        }
+    });
 });
 
 // Export functions to window for onclick handlers
