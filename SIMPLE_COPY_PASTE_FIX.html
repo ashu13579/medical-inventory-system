@@ -1,0 +1,54 @@
+<!-- 
+  SIMPLE COPY-PASTE FIX
+  
+  1. Open your index.html file
+  2. Find lines 391-403 (the showModal and hideModal functions)
+  3. Replace them with the code below
+-->
+
+        // Modal Management - FIXED VERSION
+        function showModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.remove('modal-hidden');
+                modal.style.display = 'flex';  // ← THIS LINE FIXES IT
+            }
+        }
+
+        function hideModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.add('modal-hidden');
+                modal.style.display = 'none';  // ← THIS LINE FIXES IT
+                
+                // Reset form when closing
+                const form = modal.querySelector('form');
+                if (form) form.reset();
+            }
+        }
+
+<!-- 
+  BONUS: Add these event listeners before the line "// Initialize app" (around line 1005)
+  This adds ESC key and click-outside-to-close functionality
+-->
+
+        // Modal event listeners
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const modals = document.querySelectorAll('[id$="Modal"]');
+                modals.forEach(modal => {
+                    if (!modal.classList.contains('modal-hidden')) {
+                        hideModal(modal.id);
+                    }
+                });
+            }
+        });
+        
+        document.addEventListener('click', (e) => {
+            if (e.target.id && e.target.id.endsWith('Modal')) {
+                hideModal(e.target.id);
+            }
+        });
+
+        // Initialize app
+        init();
